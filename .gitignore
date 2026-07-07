@@ -1,0 +1,11 @@
+## .NET build output
+bin/
+obj/
+
+## Rider / VS user files (keep shared .idea project files out of noise)
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/shelf/
+*.user
+*.suo

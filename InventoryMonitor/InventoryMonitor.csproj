@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>InventoryMonitor</AssemblyName>
+    <RootNamespace>InventoryMonitor</RootNamespace>
+    <!-- Plugin loads into the running TShock server process; never emit the TShock/OTAPI
+         assemblies into our output, only our own plugin DLL. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="InventoryMonitor.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- compile-only: reference TShock's public API but do not copy its runtime assemblies. -->
+    <PackageReference Include="TShock" Version="6.1.0">
+      <!-- compile only: the server process already hosts TShock/OTAPI and its content assets
+           (e.g. HttpServer.dll), so we neither copy runtime assemblies nor content files. -->
+      <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- Optional: drop the built plugin into a local server for testing.
+       Set ServerPluginsPath (e.g. dotnet build -p:ServerPluginsPath=C:\TShock\ServerPlugins). -->
+  <Target Name="CopyToServerPlugins" AfterTargets="Build" Condition="'$(ServerPluginsPath)' != ''">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ServerPluginsPath)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
