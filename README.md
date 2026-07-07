@@ -6,6 +6,8 @@ inventory surface — main inventory, armor/accessories, dyes, misc equips, pers
 (piggy bank / safe / forge / void vault / trash), the three equipment loadouts — plus active
 buffs/status effects and core stats, and it can remove items or clear inventories.
 
+DISCLAIMER: This plugin is almost entirely created by AI. Although it has been tested and used, most of the source code has not been thoroughly human-reviewed. Use with caution.
+
 ## Build & install
 
 ```sh
