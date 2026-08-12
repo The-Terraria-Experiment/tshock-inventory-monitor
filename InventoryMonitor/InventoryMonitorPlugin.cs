@@ -22,6 +22,7 @@ public sealed class InventoryMonitorPlugin : TerrariaPlugin
     private readonly MainThreadDispatcher _dispatcher = new();
     private InvMonitorConfig _config = new();
     private InventoryManager _manager = null!;
+    private SnapshotService _snapshots = null!;
     private RestEndpoints _rest = null!;
     private InvCommands _commands = null!;
     private Command? _rootCommand;
@@ -29,7 +30,10 @@ public sealed class InventoryMonitorPlugin : TerrariaPlugin
 
     public InventoryMonitorPlugin(Main game) : base(game)
     {
-        // Load before other plugins' commands so /inv is available early.
+        // Load before other plugins' commands so /inv is available early. Note this also decides
+        // hook invocation order, which runs in DESCENDING Order — so 1 puts our ServerLeave handler
+        // ahead of TShock's (Order 0), which nulls TShock.Players[who]. SnapshotService does not
+        // depend on that, but keep it in mind before lowering this.
         Order = 1;
     }
 
@@ -37,10 +41,13 @@ public sealed class InventoryMonitorPlugin : TerrariaPlugin
     {
         _config = InvMonitorConfig.LoadOrCreate();
         _manager = new InventoryManager(_config);
-        _rest = new RestEndpoints(_dispatcher, _manager, _config);
-        _commands = new InvCommands(_manager);
+        _snapshots = new SnapshotService(new SnapshotStore(_config), _config);
+        _rest = new RestEndpoints(_dispatcher, _manager, _snapshots, _config);
+        _commands = new InvCommands(_manager, _snapshots);
 
         ServerApi.Hooks.GameUpdate.Register(this, OnGameUpdate);
+        ServerApi.Hooks.NetGreetPlayer.Register(this, OnGreetPlayer);
+        ServerApi.Hooks.ServerLeave.Register(this, OnServerLeave);
 
         _rootCommand = new Command(_commands.Handle, "inv", "inventory")
         {
@@ -70,13 +77,25 @@ public sealed class InventoryMonitorPlugin : TerrariaPlugin
 
         _dispatcher.Process(); // run marshalled REST work on the main thread
         _manager.Tick();       // advance removal-verification retry jobs
+        _snapshots.Tick();     // take due join snapshots, age out expired ones
     }
+
+    /// <summary>Fires off the main thread; the capture itself is deferred onto GameUpdate.</summary>
+    private void OnGreetPlayer(GreetPlayerEventArgs args) => _snapshots.OnPlayerGreeted(args.Who);
+
+    /// <summary>
+    /// Fires on the server loop thread, immediately before Terraria replaces the player object.
+    /// The snapshot must therefore be taken inline rather than marshalled.
+    /// </summary>
+    private void OnServerLeave(LeaveEventArgs args) => _snapshots.OnPlayerLeaving(args.Who);
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             ServerApi.Hooks.GameUpdate.Deregister(this, OnGameUpdate);
+            ServerApi.Hooks.NetGreetPlayer.Deregister(this, OnGreetPlayer);
+            ServerApi.Hooks.ServerLeave.Deregister(this, OnServerLeave);
             if (_rootCommand is not null)
                 TShockAPI.Commands.ChatCommands.Remove(_rootCommand);
         }

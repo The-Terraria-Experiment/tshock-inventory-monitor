@@ -1,3 +1,4 @@
+using System.Globalization;
 using InventoryMonitor.Config;
 using InventoryMonitor.Models;
 using InventoryMonitor.Services;
@@ -14,12 +15,18 @@ public sealed class RestEndpoints
 {
     private readonly MainThreadDispatcher _dispatcher;
     private readonly InventoryManager _manager;
+    private readonly SnapshotService _snapshots;
     private readonly InvMonitorConfig _config;
 
-    public RestEndpoints(MainThreadDispatcher dispatcher, InventoryManager manager, InvMonitorConfig config)
+    public RestEndpoints(
+        MainThreadDispatcher dispatcher,
+        InventoryManager manager,
+        SnapshotService snapshots,
+        InvMonitorConfig config)
     {
         _dispatcher = dispatcher;
         _manager = manager;
+        _snapshots = snapshots;
         _config = config;
     }
 
@@ -30,6 +37,8 @@ public sealed class RestEndpoints
         api.Register(new SecureRestCommand("/inventory/removeslot", RemoveSlot, Permissions.RestRemove));
         api.Register(new SecureRestCommand("/inventory/removeitem", RemoveItem, Permissions.RestRemove));
         api.Register(new SecureRestCommand("/inventory/clear", Clear, Permissions.RestClear));
+        api.Register(new SecureRestCommand("/inventory/snapshots", Snapshots, Permissions.RestSnapshots));
+        api.Register(new SecureRestCommand("/inventory/snapshot", Snapshot, Permissions.RestSnapshots));
     }
 
     private int Timeout => _config.MainThreadTimeoutMs;
@@ -129,6 +138,145 @@ public sealed class RestEndpoints
             { "note", RemovalNote() },
         });
     }
+
+    // ---- Snapshots ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Polling endpoint. Returns cached join/leave snapshots with id &gt; <c>since</c>, oldest
+    /// first. The consumer stores the returned <c>cursor</c> and passes it back as <c>since</c>
+    /// on the next poll. No main-thread hop: the store is independently synchronized.
+    /// </summary>
+    private object Snapshots(RestRequestArgs args)
+    {
+        long since = long.TryParse(args.Parameters["since"], out long s) ? s : 0;
+
+        var (kind, kindError) = ParseKind(args.Parameters["kind"]);
+        if (kindError is not null)
+            return kindError;
+
+        var (fromUtc, fromError) = ParseUtc(args.Parameters["from"], "from");
+        if (fromError is not null)
+            return fromError;
+
+        var (toUtc, toError) = ParseUtc(args.Parameters["to"], "to");
+        if (toError is not null)
+            return toError;
+
+        if (fromUtc is { } f && toUtc is { } t && t < f)
+            return Error("'to' is earlier than 'from'.");
+
+        string? player = string.IsNullOrWhiteSpace(args.Parameters["player"]) ? null : args.Parameters["player"];
+        int limit = int.TryParse(args.Parameters["limit"], out int l) && l > 0
+            ? l
+            : _config.SnapshotQueryDefaultLimit;
+
+        bool metaOnly = IsTrue(args.Parameters["meta"]);
+        bool newestFirst = IsTrue(args.Parameters["latest"]);
+        var groups = ParseGroups(args.Parameters["include"]);
+
+        var store = _snapshots.Store;
+        var found = store.Query(new SnapshotQuery
+        {
+            SinceId = since,
+            PlayerName = player,
+            Kind = kind,
+            FromUtc = fromUtc,
+            ToUtc = toUtc,
+            NewestFirst = newestFirst,
+            Limit = limit,
+        });
+
+        // Highest id in the batch, so a consumer capped by `limit` resumes exactly where it left
+        // off. Taken as a max rather than "last element" so it stays correct under `latest=true`,
+        // where results come back newest-first.
+        long cursor = found.Count > 0 ? found.Max(sn => sn.Id) : since;
+
+        return Success(new()
+        {
+            { "snapshots", metaOnly
+                ? found.Select(sn => (object)sn.ToSummary()).ToList()
+                : found.Select(sn => (object)Projected(sn, groups)).ToList() },
+            { "count", found.Count },
+            { "cursor", cursor },
+            { "head", store.Cursor },
+            // Only true when the page filled up AND newer ids exist — i.e. drain again now. A
+            // short page means the consumer is caught up with everything matching its filter.
+            { "more", found.Count >= limit && cursor < store.Cursor },
+            { "retained", store.Count },
+            { "oldestRetainedUtc", store.OldestRetainedUtc },
+            { "note", SnapshotNote() },
+        });
+    }
+
+    /// <summary>Fetches a single cached snapshot by id.</summary>
+    private object Snapshot(RestRequestArgs args)
+    {
+        if (!long.TryParse(args.Parameters["id"], out long id))
+            return Error("Missing or invalid 'id'.");
+
+        var snapshot = _snapshots.Store.GetById(id);
+        if (snapshot is null)
+            return Error($"Snapshot {id} is not retained (expired, evicted, or never existed).");
+
+        var groups = ParseGroups(args.Parameters["include"]);
+        return Success(new()
+        {
+            { "snapshot", Projected(snapshot, groups) },
+            { "note", SnapshotNote() },
+        });
+    }
+
+    /// <summary>
+    /// Rebuilds a snapshot with its report narrowed to the requested groups. Snapshots are always
+    /// captured in full, so this is purely a response-shaping filter.
+    /// </summary>
+    private static InventorySnapshot Projected(InventorySnapshot snapshot, ReportGroups groups) =>
+        groups == ReportGroups.All
+            ? snapshot
+            : new InventorySnapshot
+            {
+                Id = snapshot.Id,
+                KindValue = snapshot.KindValue,
+                CapturedAtUtc = snapshot.CapturedAtUtc,
+                Player = InventoryReader.Project(snapshot.Player, groups),
+            };
+
+    private static (SnapshotKind? Kind, RestObject? Error) ParseKind(string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind))
+            return (null, null);
+
+        return kind.Trim().ToLowerInvariant() switch
+        {
+            "join" => (SnapshotKind.Join, null),
+            "leave" => (SnapshotKind.Leave, null),
+            _ => (null, Error($"Invalid 'kind' '{kind}' (expected 'join' or 'leave').")),
+        };
+    }
+
+    /// <summary>
+    /// Parses an ISO-8601 timestamp into UTC. A value with no offset is read as UTC rather than
+    /// server-local time, so consumers in another timezone can't silently shift their window.
+    /// </summary>
+    private static (DateTime? Value, RestObject? Error) ParseUtc(string? raw, string parameter)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return (null, null);
+
+        if (!DateTime.TryParse(raw, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed))
+            return (null, Error($"Invalid '{parameter}' timestamp '{raw}' (expected ISO-8601, e.g. 2026-08-12T18:00:00Z)."));
+
+        return (parsed, null);
+    }
+
+    private static bool IsTrue(string? value) =>
+        value is not null && (value.Equals("true", StringComparison.OrdinalIgnoreCase) || value == "1");
+
+    private string SnapshotNote() =>
+        $"Snapshots are in-memory only (retained {_config.SnapshotRetentionMinutes} min, " +
+        $"max {_config.SnapshotMaxEntries}) and are lost on restart. Without SSC they reflect the " +
+        "last inventory the client synced, not an authoritative record.";
 
     // ---- Helpers --------------------------------------------------------------------------
 

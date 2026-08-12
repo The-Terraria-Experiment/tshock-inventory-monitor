@@ -11,9 +11,11 @@ public static class Permissions
     public const string Read = "invmonitor.read";
     public const string Remove = "invmonitor.remove";
     public const string Clear = "invmonitor.clear";
+    public const string Snapshots = "invmonitor.snapshots";
 
     // REST endpoint nodes.
     public const string RestRead = "invmonitor.rest.read";
     public const string RestRemove = "invmonitor.rest.remove";
     public const string RestClear = "invmonitor.rest.clear";
+    public const string RestSnapshots = "invmonitor.rest.snapshots";
 }
