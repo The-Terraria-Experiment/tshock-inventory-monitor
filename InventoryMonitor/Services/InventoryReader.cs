@@ -5,23 +5,53 @@ using TShockAPI;
 namespace InventoryMonitor.Services;
 
 /// <summary>
-/// Builds a <see cref="PlayerReport"/> from a live <see cref="TSPlayer"/>. Pure read; must be
-/// invoked on the main server thread (callers marshal via the dispatcher).
+/// Identifying fields for a report, resolved separately from the item data so a report can be
+/// built for a <see cref="Player"/> whose <see cref="TSPlayer"/> wrapper is already gone.
+/// </summary>
+public readonly record struct PlayerIdentity(
+    int Index, string Name, string? Account, string Group, string Ip, string Position);
+
+/// <summary>
+/// Builds a <see cref="PlayerReport"/> from a live player. Pure read: it allocates a fresh object
+/// graph and mutates nothing.
+///
+/// Normally called on the main server thread (REST callers marshal via the dispatcher). The one
+/// exception is leave-snapshot capture, which must run inline on the server loop thread because
+/// <c>RemoteClient.Reset()</c> replaces <c>Main.player[i]</c> the moment the hook returns — see
+/// <see cref="SnapshotService.OnPlayerLeaving"/>.
 /// </summary>
 public static class InventoryReader
 {
-    public static PlayerReport BuildReport(TSPlayer tsp, ReportGroups groups)
-    {
-        var p = tsp.TPlayer;
+    public static PlayerIdentity IdentityOf(TSPlayer tsp) => new(
+        tsp.Index,
+        tsp.Name,
+        tsp.Account?.Name,
+        tsp.Group?.Name ?? "",
+        tsp.IP ?? "",
+        $"{tsp.TileX},{tsp.TileY}");
 
+    /// <summary>Fallback identity for a raw <see cref="Player"/> with no TShock wrapper available.</summary>
+    public static PlayerIdentity IdentityOf(Player p, int index) => new(
+        index,
+        p.name ?? "",
+        null,
+        "",
+        "",
+        $"{(int)(p.position.X / 16f)},{(int)(p.position.Y / 16f)}");
+
+    public static PlayerReport BuildReport(TSPlayer tsp, ReportGroups groups) =>
+        BuildReport(tsp.TPlayer, IdentityOf(tsp), groups);
+
+    public static PlayerReport BuildReport(Player p, PlayerIdentity identity, ReportGroups groups)
+    {
         var report = new PlayerReport
         {
-            Index = tsp.Index,
-            Name = tsp.Name,
-            Account = tsp.Account?.Name,
-            Group = tsp.Group?.Name ?? "",
-            Ip = tsp.IP ?? "",
-            Position = $"{tsp.TileX},{tsp.TileY}",
+            Index = identity.Index,
+            Name = identity.Name,
+            Account = identity.Account,
+            Group = identity.Group,
+            Ip = identity.Ip,
+            Position = identity.Position,
             ServerSideCharacter = Main.ServerSideCharacter,
             Stats = new StatsInfo
             {
@@ -68,6 +98,32 @@ public static class InventoryReader
         }
 
         return report;
+    }
+
+    /// <summary>
+    /// Narrows an already-built report to a subset of container groups. Used to serve cached
+    /// snapshots (always captured in full) against a caller's <c>include=</c> filter.
+    /// </summary>
+    public static PlayerReport Project(PlayerReport report, ReportGroups groups)
+    {
+        if (groups == ReportGroups.All)
+            return report;
+
+        return new PlayerReport
+        {
+            Index = report.Index,
+            Name = report.Name,
+            Account = report.Account,
+            Group = report.Group,
+            Ip = report.Ip,
+            Position = report.Position,
+            ServerSideCharacter = report.ServerSideCharacter,
+            Stats = report.Stats,
+            Buffs = report.Buffs,
+            Containers = report.Containers
+                .Where(c => Enum.TryParse<ReportGroups>(c.Group, out var g) && (g & groups) != 0)
+                .ToList(),
+        };
     }
 
     private static List<BuffEntry> ReadBuffs(Player p)

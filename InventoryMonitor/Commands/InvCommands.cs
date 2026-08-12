@@ -11,8 +11,13 @@ namespace InventoryMonitor.Commands;
 public sealed class InvCommands
 {
     private readonly InventoryManager _manager;
+    private readonly SnapshotService _snapshots;
 
-    public InvCommands(InventoryManager manager) => _manager = manager;
+    public InvCommands(InventoryManager manager, SnapshotService snapshots)
+    {
+        _manager = manager;
+        _snapshots = snapshots;
+    }
 
     public void Handle(CommandArgs args)
     {
@@ -32,6 +37,8 @@ public sealed class InvCommands
             case "removeslot": RemoveSlot(p, ps); break;
             case "removeitem": RemoveItem(p, ps); break;
             case "clear": Clear(p, ps); break;
+            case "snapshots": Snapshots(p, ps); break;
+            case "snapshot": Snapshot(p, ps); break;
             default: ShowHelp(p); break;
         }
     }
@@ -44,6 +51,111 @@ public sealed class InvCommands
         p.SendInfoMessage("  /inv removeslot <player> <slot> - remove a single global slot (0.." + (SlotMap.MaxSlot - 1) + ")");
         p.SendInfoMessage("  /inv removeitem <player> <id|name> [amount] - remove item(s) by type");
         p.SendInfoMessage("  /inv clear <player> [all|main|storage|core|misc|loadouts] - clear inventory");
+        p.SendInfoMessage("  /inv snapshots [player] [page] - list cached join/leave snapshots");
+        p.SendInfoMessage("  /inv snapshot <id> [page] - show one cached snapshot in full");
+    }
+
+    // ---- snapshots --------------------------------------------------------------------------
+
+    private void Snapshots(TSPlayer p, List<string> ps)
+    {
+        if (!Require(p, Permissions.Snapshots))
+            return;
+
+        // Trailing numeric argument is the page; anything else is a player filter.
+        string? player = null;
+        int page = 1;
+        if (ps.Count >= 2)
+        {
+            if (int.TryParse(ps[^1], out int pg) && ps.Count == 2)
+                page = pg;
+            else
+            {
+                player = ps[1];
+                if (ps.Count >= 3 && int.TryParse(ps[2], out int pg2))
+                    page = pg2;
+            }
+        }
+
+        var store = _snapshots.Store;
+        var found = store.Query(new SnapshotQuery { PlayerName = player, Limit = int.MaxValue });
+
+        var lines = found
+            .Select(s => $"#{s.Id} {s.Kind,-5} {s.Player.Name} - {s.ItemCount} items, " +
+                         $"{FormatAge(s.CapturedAtUtc)} ago")
+            .ToList();
+
+        PaginationTools.SendPage(p, page, lines, new PaginationTools.Settings
+        {
+            HeaderFormat = player is null
+                ? $"Cached snapshots, {store.Count} retained ({{0}}/{{1}}):"
+                : $"Cached snapshots for {player} ({{0}}/{{1}}):",
+            FooterFormat = $"Type /inv snapshots{(player is null ? "" : " " + player)} {{0}} for more. " +
+                           "Use /inv snapshot <id> for detail.",
+            NothingToDisplayString = player is null
+                ? "No snapshots cached yet."
+                : $"No cached snapshots for '{player}'.",
+        });
+    }
+
+    private void Snapshot(TSPlayer p, List<string> ps)
+    {
+        if (!Require(p, Permissions.Snapshots))
+            return;
+        if (ps.Count < 2 || !long.TryParse(ps[1], out long id))
+        {
+            p.SendErrorMessage("Usage: /inv snapshot <id> [page]");
+            return;
+        }
+
+        var snapshot = _snapshots.Store.GetById(id);
+        if (snapshot is null)
+        {
+            p.SendErrorMessage($"Snapshot {id} is not retained (expired, evicted, or never existed).");
+            return;
+        }
+
+        int page = ps.Count >= 3 && int.TryParse(ps[2], out int pg) ? pg : 1;
+        var report = snapshot.Player;
+
+        var lines = new List<string>
+        {
+            $"Captured {FormatAge(snapshot.CapturedAtUtc)} ago ({snapshot.CapturedAtUtc:u})" +
+            (snapshot.Stale ? " - non-SSC, last client-synced state" : ""),
+            $"Life {report.Stats.Life}/{report.Stats.LifeMax}  Mana {report.Stats.Mana}/{report.Stats.ManaMax}" +
+            $"  Group {report.Group}  Pos {report.Position}",
+        };
+
+        if (report.Buffs.Count > 0)
+            lines.Add("Buffs: " + string.Join(", ", report.Buffs.Select(b =>
+                $"{b.Name}({(b.SecondsRemaining < 0 ? "perm" : b.SecondsRemaining + "s")})")));
+
+        foreach (var c in report.Containers)
+        {
+            lines.Add($"== {c.Name} ==");
+            foreach (var it in c.Items)
+                lines.Add($"  [{it.GlobalSlot}] {Describe(it)}");
+        }
+
+        PaginationTools.SendPage(p, page, lines, new PaginationTools.Settings
+        {
+            HeaderFormat = $"Snapshot #{snapshot.Id} ({snapshot.Kind}) of {report.Name} ({{0}}/{{1}}):",
+            FooterFormat = $"Type /inv snapshot {snapshot.Id} {{0}} for more.",
+            NothingToDisplayString = "This snapshot is empty.",
+        });
+    }
+
+    private static string FormatAge(DateTime capturedUtc)
+    {
+        var age = DateTime.UtcNow - capturedUtc;
+        if (age < TimeSpan.Zero)
+            age = TimeSpan.Zero;
+
+        return age.TotalMinutes < 1
+            ? $"{(int)age.TotalSeconds}s"
+            : age.TotalHours < 1
+                ? $"{(int)age.TotalMinutes}m"
+                : $"{(int)age.TotalHours}h{age.Minutes:00}m";
     }
 
     // ---- read -----------------------------------------------------------------------------
