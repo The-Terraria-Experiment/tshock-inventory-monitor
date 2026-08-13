@@ -195,6 +195,7 @@ All endpoints require a REST token (`&token=...`) whose group holds the relevant
 | GET | `/inventory/clear` | `player`, optional `scope` | `invmonitor.rest.clear` |
 | GET | `/inventory/snapshots` | optional `since`, `from`, `to`, `player`, `kind`, `latest`, `limit`, `meta`, `include` | `invmonitor.rest.snapshots` |
 | GET | `/inventory/snapshot` | `id`, optional `include` | `invmonitor.rest.snapshots` |
+| GET | `/inventory/itemnames` | — | `invmonitor.rest.itemnames` |
 
 Snapshot query params:
 
@@ -223,6 +224,27 @@ curl "http://localhost:7878/inventory/removeitem?player=Alice&item=Zenith&token=
 curl "http://localhost:7878/inventory/clear?player=Alice&scope=main&token=TOKEN"
 ```
 
+### Item name catalog
+
+`/inventory/itemnames` dumps every item id the running server knows about with its display name,
+for consumers that need to resolve ids offline (useful when an extractor can't be run against the
+game files). Names come from the server's loaded localization, so they match exactly what the read
+and snapshot endpoints report.
+
+```sh
+curl "http://localhost:7878/inventory/itemnames?token=TOKEN" > items.json
+```
+
+```json
+{ "status": "200", "version": "1.4.5.6", "count": 5455,
+  "items": { "-48": "…", "1": "Iron Pickaxe", "2": "Dirt Block" } }
+```
+
+`version` is Terraria's version, and the map includes the negative net ids Terraria uses for item
+variants. This is a manual, occasional tool, not a hot path: the first call builds the whole table
+on the main thread (then caches it for the life of the process) and every call serializes several
+thousand entries. Dump it once per server version and keep the file.
+
 ## In-game commands
 
 Equivalent to the REST endpoints, dispatched under `/inv` (alias `/inventory`):
@@ -242,4 +264,4 @@ Equivalent to the REST endpoints, dispatched under `/inv` (alias `/inventory`):
 Grant nodes to TShock groups, e.g. `/group addperm admin invmonitor.read invmonitor.remove invmonitor.clear`.
 
 - In-game: `invmonitor.read`, `invmonitor.remove`, `invmonitor.clear`, `invmonitor.snapshots`
-- REST: `invmonitor.rest.read`, `invmonitor.rest.remove`, `invmonitor.rest.clear`, `invmonitor.rest.snapshots`
+- REST: `invmonitor.rest.read`, `invmonitor.rest.remove`, `invmonitor.rest.clear`, `invmonitor.rest.snapshots`, `invmonitor.rest.itemnames`

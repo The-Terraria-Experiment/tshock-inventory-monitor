@@ -18,4 +18,5 @@ public static class Permissions
     public const string RestRemove = "invmonitor.rest.remove";
     public const string RestClear = "invmonitor.rest.clear";
     public const string RestSnapshots = "invmonitor.rest.snapshots";
+    public const string RestItemNames = "invmonitor.rest.itemnames";
 }

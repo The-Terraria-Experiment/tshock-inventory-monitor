@@ -39,6 +39,7 @@ public sealed class RestEndpoints
         api.Register(new SecureRestCommand("/inventory/clear", Clear, Permissions.RestClear));
         api.Register(new SecureRestCommand("/inventory/snapshots", Snapshots, Permissions.RestSnapshots));
         api.Register(new SecureRestCommand("/inventory/snapshot", Snapshot, Permissions.RestSnapshots));
+        api.Register(new SecureRestCommand("/inventory/itemnames", ItemNames, Permissions.RestItemNames));
     }
 
     private int Timeout => _config.MainThreadTimeoutMs;
@@ -223,6 +224,28 @@ public sealed class RestEndpoints
         {
             { "snapshot", Projected(snapshot, groups) },
             { "note", SnapshotNote() },
+        });
+    }
+
+    // ---- Item catalog ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Dumps every item id the running Terraria build knows about with its display name, for
+    /// consumers that need to resolve ids offline and cannot extract the game's own files.
+    /// Intended for occasional manual use: the first call builds the whole table on the main
+    /// thread, and every call serializes several thousand entries.
+    /// </summary>
+    private object ItemNames(RestRequestArgs args)
+    {
+        // Generous timeout: the one-time build walks every item, and this endpoint is manual
+        // enough that waiting beats failing. Later calls are served from the cache.
+        var catalog = _dispatcher.Invoke(ItemNameCatalog.Get, Math.Max(Timeout, 15_000));
+
+        return Success(new()
+        {
+            { "version", catalog.Version },
+            { "count", catalog.Items.Count },
+            { "items", catalog.Items },
         });
     }
 
