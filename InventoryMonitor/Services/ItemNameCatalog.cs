@@ -11,9 +11,17 @@ public sealed record ItemCatalog(string Version, Dictionary<string, string> Item
 /// reliable source for a server that has no extractable game files. Names come from the loaded
 /// localization, so the catalog matches exactly what the read/snapshot endpoints report.
 ///
-/// The result is immutable for the life of the process and is built once, then cached: a build
-/// walks ~6k items through <see cref="Item.netDefaults"/> and is far too coarse to run on the main
-/// thread per request.
+/// Unlike the rest of the plugin's Terraria access, this runs on the calling thread and does NOT
+/// hop to the main thread. That is deliberate: an empty server stops pumping GameUpdate, so a
+/// marshalled build would time out in exactly the situation you want to dump the catalog in.
+/// It is safe because the build only reads state that is fixed after startup — the item-default
+/// tables, the localization tables, and the world-generation flags variant selection consults —
+/// and writes nothing back. Verified against the IL: nothing reachable from
+/// <see cref="Item.netDefaults"/> or <see cref="Item.Name"/> touches <c>Main.rand</c> or any other
+/// mutable shared Terraria state.
+///
+/// The result is immutable for the life of the process, so it is built once and cached: a build
+/// walks ~6k items and is far too coarse to repeat per request.
 /// </summary>
 public static class ItemNameCatalog
 {
@@ -29,8 +37,8 @@ public static class ItemNameCatalog
     private static ItemCatalog? _cached;
 
     /// <summary>
-    /// Returns the catalog, building it on first use. Must be called on the main thread — item
-    /// defaults and localization are shared Terraria state.
+    /// Returns the catalog, building it on first use. Callable from any thread; concurrent callers
+    /// share a single build rather than racing to produce their own.
     /// </summary>
     public static ItemCatalog Get()
     {

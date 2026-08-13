@@ -232,14 +232,16 @@ public sealed class RestEndpoints
     /// <summary>
     /// Dumps every item id the running Terraria build knows about with its display name, for
     /// consumers that need to resolve ids offline and cannot extract the game's own files.
-    /// Intended for occasional manual use: the first call builds the whole table on the main
-    /// thread, and every call serializes several thousand entries.
+    /// Intended for occasional manual use: every call serializes several thousand entries.
+    ///
+    /// The only endpoint that does not marshal to the main thread. It reads nothing player- or
+    /// world-mutable (see <see cref="ItemNameCatalog"/>), and hopping would make it fail on an
+    /// idle server — which stops pumping GameUpdate, and is precisely when an operator dumps the
+    /// catalog. Every other endpoint needs a player online anyway, so the hop still holds there.
     /// </summary>
     private object ItemNames(RestRequestArgs args)
     {
-        // Generous timeout: the one-time build walks every item, and this endpoint is manual
-        // enough that waiting beats failing. Later calls are served from the cache.
-        var catalog = _dispatcher.Invoke(ItemNameCatalog.Get, Math.Max(Timeout, 15_000));
+        var catalog = ItemNameCatalog.Get();
 
         return Success(new()
         {

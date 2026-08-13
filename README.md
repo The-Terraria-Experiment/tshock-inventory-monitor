@@ -241,9 +241,14 @@ curl "http://localhost:7878/inventory/itemnames?token=TOKEN" > items.json
 ```
 
 `version` is Terraria's version, and the map includes the negative net ids Terraria uses for item
-variants. This is a manual, occasional tool, not a hot path: the first call builds the whole table
-on the main thread (then caches it for the life of the process) and every call serializes several
-thousand entries. Dump it once per server version and keep the file.
+variants. This is a manual, occasional tool, not a hot path: every call serializes several thousand
+entries. Dump it once per server version and keep the file.
+
+Unlike the other endpoints, this one answers with **nobody online**. An empty server stops pumping
+the game loop, so anything marshalled onto the main thread times out — and an empty server is
+exactly when you'd dump the catalog. It's safe to run off the loop because it only reads tables
+that are fixed after startup (item defaults, localization, world flags) and writes nothing back.
+The table is built once and cached for the life of the process.
 
 ## In-game commands
 
