@@ -4,8 +4,9 @@ A TShock **6.1** plugin (.NET 9) for reading and managing player inventories ove
 **REST API** and equivalent **in-game commands**. It reports every item across a player's entire
 inventory surface — main inventory, armor/accessories, dyes, misc equips, personal storage
 (piggy bank / safe / forge / void vault / trash), the three equipment loadouts — plus active
-buffs/status effects and core stats, and it can remove items or clear inventories. It also caches a
-snapshot of each player's inventory as they **join and leave**, which an external consumer polls for.
+buffs/status effects and core stats, and — on servers running ServerSideCharacters — it can remove
+items or clear inventories. It also caches a snapshot of each player's inventory as they **join and
+leave**, which an external consumer polls for.
 
 DISCLAIMER: This plugin is almost entirely created by AI. Although it has been tested and used, most of the source code has not been thoroughly human-reviewed. Use with caution.
 
@@ -42,20 +43,51 @@ prone to breaking on a TShock/Terraria update:
 - **`SnapshotStoreTests`** — monotonic ids, cursor-based paging, time-window and newest-first
   queries, both eviction policies (age and capacity), and concurrent `Add` (join and leave
   snapshots are written from different threads).
+- **`RemovalGateTests`** — the SSC gate that every removal path goes through.
 
 Removal/packet paths (`InventoryManager` write ops, `InventoryReader`) aren't unit-tested because
 they require a live server (packet sends, item/localization data); verify those on a running server
-per the steps below.
+per [Verifying on a live server](#verifying-on-a-live-server).
 
 ## Removal & ServerSideCharacters (important)
 
-This server runs **without SSC**, so the Terraria client owns its inventory. Removals are therefore
-**best-effort**: the plugin clears the slot server-side, pushes a `PlayerSlot` packet to the client,
-then re-applies the clear for a few passes to win benign client/server sync races. A client that
-keeps re-adding an item (i.e. a cheat client) will eventually win — this is **not** an anti-cheat
-enforcement mechanism; ban such players instead. When the retry budget is exhausted while an item
-is still being re-added, the plugin logs a console notice. If SSC is enabled later, the same code
-path persists automatically via TShock's character DB (see `ServerSideCharacter` in reports).
+**Removals require ServerSideCharacters. With SSC off — as this server currently runs — every
+removal command and endpoint refuses and changes nothing.**
+
+This is not a policy choice, it's the protocol. Terraria's `MessageBuffer.GetData`, case 5
+(`PlayerSlot`), opens its client-side branch with:
+
+```csharp
+if (player == Main.myPlayer && !Main.ServerSideCharacter && !Main.player[player].HasLockedInventory())
+    break;   // packet discarded before anything is applied
+```
+
+Without SSC the owning client **throws the packet away**. Retrying can't help: the client never
+looks at it. Worse, clearing the slot server-side anyway did take effect locally, so `/inv read`
+and snapshots reported an item the player still had, and other clients — which *do* apply an
+inbound packet 5 for someone else's player — briefly disagreed with the owner. Refusing is the
+honest behaviour.
+
+Two things that look like escape hatches, and why they aren't:
+
+- **`HasLockedInventory()`** is `IsStackingItems() || Main.LocalPlayerHasPendingInventoryActions()`
+  — transient client-local state during a quick-stack. The server cannot set it.
+- **Telling the client SSC is on.** The client assigns `Main.ServerSideCharacter` from a bit in
+  WorldData (packet 7) and then calls `Main.ActivePlayerFileData.MarkAsServerSide()`. That does make
+  it honour packet 5, but `Player.SavePlayer` early-returns on `playerFile.ServerSideCharacter` and
+  nothing ever un-marks it, so the player silently stops saving their character for the rest of the
+  session. Not acceptable on a live server.
+
+There is one unguarded server→client removal primitive: packet 110
+(`PacketTypes.MassWireOperationPay`) makes the client run `Player.ConsumeItem(type)` N times over
+`inventory[0..57]` with no SSC check. It was evaluated and **deliberately declined** — it reaches
+only the main inventory, coins and ammo (never armor, dyes, misc equips, banks, trash or loadouts),
+it removes by item type rather than by slot, and a cheat client can ignore it just as easily as
+packet 5. Supporting removal on non-SSC characters isn't a goal; enabling SSC is the fix.
+
+With SSC enabled the existing path is authoritative and needs no changes: the slot is cleared
+server-side, pushed via `PlayerSlot`, applied by the client, and persisted through TShock's
+character DB. Reports expose `ServerSideCharacter` so a consumer can tell which mode it's in.
 
 > **JSON casing.** TShock serializes REST responses with stock Newtonsoft settings, so the
 > top-level keys this plugin sets are lowercase (`snapshots`, `cursor`, `count`) while everything
@@ -66,10 +98,25 @@ Tunable in `tshock/InventoryMonitor.json`:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `RemovalRetryCount` | 3 | Re-clear passes after the initial clear (0 = single best-effort). |
-| `RemovalRetryIntervalTicks` | 20 | Ticks (~60/s) between verification passes. |
 | `ReadAllMaxPlayers` | 255 | Cap on players serialized by a single `readall`. |
 | `MainThreadTimeoutMs` | 3000 | How long a REST call waits for its main-thread work. |
+
+`RemovalRetryCount` and `RemovalRetryIntervalTicks` were removed along with the retry loop. Leaving
+them in an existing `InventoryMonitor.json` is harmless — unknown keys are ignored on load.
+
+## Verifying on a live server
+
+Removal and packet paths can only be checked in-game. With SSC **off**:
+
+1. `/inv read <player>` — note a slot that holds an item.
+2. `/inv removeslot <player> <slot>`, `/inv removeitem <player> <id>`, and
+   `/inv clear <player> main` each print the SSC refusal and change nothing.
+3. `GET /inventory/removeslot?player=…&slot=…` returns `400` with the same reason.
+4. `/inv read <player>` again — the item is still listed. (The old bug was the server's copy going
+   empty while the player kept the item, so this is the regression check.)
+
+With SSC **on** (worth re-checking if it's ever enabled): the same three operations succeed, the
+item actually disappears from the client's inventory, and it stays gone after a reconnect.
 
 ## Join/leave snapshots
 
@@ -190,12 +237,15 @@ All endpoints require a REST token (`&token=...`) whose group holds the relevant
 |--------|-------|--------|------------|
 | GET | `/inventory/read` | `player`, optional `include` | `invmonitor.rest.read` |
 | GET | `/inventory/readall` | optional `include` | `invmonitor.rest.read` |
-| GET | `/inventory/removeslot` | `player`, `slot` | `invmonitor.rest.remove` |
-| GET | `/inventory/removeitem` | `player`, `item` (id or name), optional `amount` | `invmonitor.rest.remove` |
-| GET | `/inventory/clear` | `player`, optional `scope` | `invmonitor.rest.clear` |
+| GET | `/inventory/removeslot` † | `player`, `slot` | `invmonitor.rest.remove` |
+| GET | `/inventory/removeitem` † | `player`, `item` (id or name), optional `amount` | `invmonitor.rest.remove` |
+| GET | `/inventory/clear` † | `player`, optional `scope` | `invmonitor.rest.clear` |
 | GET | `/inventory/snapshots` | optional `since`, `from`, `to`, `player`, `kind`, `latest`, `limit`, `meta`, `include` | `invmonitor.rest.snapshots` |
 | GET | `/inventory/snapshot` | `id`, optional `include` | `invmonitor.rest.snapshots` |
 | GET | `/inventory/itemnames` | — | `invmonitor.rest.itemnames` |
+
+† Requires ServerSideCharacters. With SSC off these return `400` with a reason and change nothing —
+see [Removal & ServerSideCharacters](#removal--serversidecharacters-important).
 
 Snapshot query params:
 
@@ -258,11 +308,14 @@ Equivalent to the REST endpoints, dispatched under `/inv` (alias `/inventory`):
 |---------|------------|
 | `/inv read <player> [page]` | `invmonitor.read` |
 | `/inv readall [page]` | `invmonitor.read` |
-| `/inv removeslot <player> <slot>` | `invmonitor.remove` |
-| `/inv removeitem <player> <id\|name> [amount]` | `invmonitor.remove` |
-| `/inv clear <player> [all\|main\|storage\|core\|misc\|loadouts]` | `invmonitor.clear` |
+| `/inv removeslot <player> <slot>` † | `invmonitor.remove` |
+| `/inv removeitem <player> <id\|name> [amount]` † | `invmonitor.remove` |
+| `/inv clear <player> [all\|main\|storage\|core\|misc\|loadouts]` † | `invmonitor.clear` |
 | `/inv snapshots [player] [page]` | `invmonitor.snapshots` |
 | `/inv snapshot <id> [page]` | `invmonitor.snapshots` |
+
+† Requires ServerSideCharacters. With SSC off these refuse and change nothing — see
+[Removal & ServerSideCharacters](#removal--serversidecharacters-important).
 
 ## Permissions
 

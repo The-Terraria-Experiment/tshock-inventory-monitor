@@ -8,17 +8,6 @@ namespace InventoryMonitor.Config;
 /// </summary>
 public sealed class InvMonitorConfig
 {
-    /// <summary>
-    /// How many times, after the initial clear, to re-clear a slot the client re-syncs back.
-    /// Non-SSC only: this resolves benign client/server sync races. It is NOT anti-cheat
-    /// enforcement — a client that keeps re-adding an item will win; ban it instead.
-    /// Set to 0 for a single best-effort clear with no retries.
-    /// </summary>
-    public int RemovalRetryCount { get; set; } = 3;
-
-    /// <summary>Ticks (~60/sec) to wait between removal verification passes.</summary>
-    public int RemovalRetryIntervalTicks { get; set; } = 20;
-
     /// <summary>Safety cap on how many players a single <c>readall</c> will serialize.</summary>
     public int ReadAllMaxPlayers { get; set; } = 255;
 

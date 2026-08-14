@@ -48,11 +48,14 @@ public sealed class InvCommands
         p.SendInfoMessage("Inventory Monitor commands:");
         p.SendInfoMessage("  /inv read <player> [page] - show a player's inventory, equipment, buffs, stats");
         p.SendInfoMessage("  /inv readall - summarize every online player");
-        p.SendInfoMessage("  /inv removeslot <player> <slot> - remove a single global slot (0.." + (SlotMap.MaxSlot - 1) + ")");
-        p.SendInfoMessage("  /inv removeitem <player> <id|name> [amount] - remove item(s) by type");
-        p.SendInfoMessage("  /inv clear <player> [all|main|storage|core|misc|loadouts] - clear inventory");
+        p.SendInfoMessage("  /inv removeslot <player> <slot> - [SSC] remove a single global slot (0.." + (SlotMap.MaxSlot - 1) + ")");
+        p.SendInfoMessage("  /inv removeitem <player> <id|name> [amount] - [SSC] remove item(s) by type");
+        p.SendInfoMessage("  /inv clear <player> [all|main|storage|core|misc|loadouts] - [SSC] clear inventory");
         p.SendInfoMessage("  /inv snapshots [player] [page] - list cached join/leave snapshots");
         p.SendInfoMessage("  /inv snapshot <id> [page] - show one cached snapshot in full");
+
+        if (InventoryManager.RemovalBlockedReason() is not null)
+            p.SendInfoMessage("[SSC] commands are disabled: this server runs without ServerSideCharacters.");
     }
 
     // ---- snapshots --------------------------------------------------------------------------
@@ -233,7 +236,7 @@ public sealed class InvCommands
 
     private void RemoveSlot(TSPlayer p, List<string> ps)
     {
-        if (!Require(p, Permissions.Remove))
+        if (!Require(p, Permissions.Remove) || !RequireSsc(p))
             return;
         if (ps.Count < 3 || !int.TryParse(ps[2], out int slot))
         {
@@ -257,7 +260,7 @@ public sealed class InvCommands
 
     private void RemoveItem(TSPlayer p, List<string> ps)
     {
-        if (!Require(p, Permissions.Remove))
+        if (!Require(p, Permissions.Remove) || !RequireSsc(p))
             return;
         if (ps.Count < 3)
         {
@@ -303,7 +306,7 @@ public sealed class InvCommands
 
     private void Clear(TSPlayer p, List<string> ps)
     {
-        if (!Require(p, Permissions.Clear))
+        if (!Require(p, Permissions.Clear) || !RequireSsc(p))
             return;
         if (ps.Count < 2)
         {
@@ -328,6 +331,17 @@ public sealed class InvCommands
             return true;
 
         p.SendErrorMessage($"You do not have permission to use this command ({permission}).");
+        return false;
+    }
+
+    /// <summary>Refuses a removal when the client, not the server, owns the inventory.</summary>
+    private static bool RequireSsc(TSPlayer p)
+    {
+        if (InventoryManager.RemovalBlockedReason() is not { } reason)
+            return true;
+
+        p.SendErrorMessage(reason);
+        p.SendErrorMessage("Enable ServerSideCharacters in TShock's config to allow removals.");
         return false;
     }
 
