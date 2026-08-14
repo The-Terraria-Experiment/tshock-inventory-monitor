@@ -40,7 +40,7 @@ public sealed class InventoryMonitorPlugin : TerrariaPlugin
     public override void Initialize()
     {
         _config = InvMonitorConfig.LoadOrCreate();
-        _manager = new InventoryManager(_config);
+        _manager = new InventoryManager();
         _snapshots = new SnapshotService(new SnapshotStore(_config), _config);
         _rest = new RestEndpoints(_dispatcher, _manager, _snapshots, _config);
         _commands = new InvCommands(_manager, _snapshots);
@@ -76,7 +76,6 @@ public sealed class InventoryMonitorPlugin : TerrariaPlugin
         }
 
         _dispatcher.Process(); // run marshalled REST work on the main thread
-        _manager.Tick();       // advance removal-verification retry jobs
         _snapshots.Tick();     // take due join snapshots, age out expired ones
     }
 

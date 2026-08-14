@@ -82,6 +82,9 @@ public sealed class RestEndpoints
 
     private object RemoveSlot(RestRequestArgs args)
     {
+        if (InventoryManager.RemovalBlockedReason() is { } blocked)
+            return Error(blocked);
+
         var (player, error) = FindPlayer(args.Parameters["player"]);
         if (error is not null)
             return error;
@@ -103,6 +106,9 @@ public sealed class RestEndpoints
 
     private object RemoveItem(RestRequestArgs args)
     {
+        if (InventoryManager.RemovalBlockedReason() is { } blocked)
+            return Error(blocked);
+
         var (player, error) = FindPlayer(args.Parameters["player"]);
         if (error is not null)
             return error;
@@ -125,6 +131,9 @@ public sealed class RestEndpoints
 
     private object Clear(RestRequestArgs args)
     {
+        if (InventoryManager.RemovalBlockedReason() is { } blocked)
+            return Error(blocked);
+
         var (player, error) = FindPlayer(args.Parameters["player"]);
         if (error is not null)
             return error;
@@ -358,10 +367,9 @@ public sealed class RestEndpoints
         return groups == ReportGroups.None ? ReportGroups.All : groups;
     }
 
-    private string RemovalNote() =>
-        _config.RemovalRetryCount > 0
-            ? $"Cleared server-side and pushed to client; will re-apply up to {_config.RemovalRetryCount}x if the client re-syncs."
-            : "Cleared server-side and pushed to client (single best-effort attempt).";
+    private static string RemovalNote() =>
+        "Cleared server-side and pushed to the client via PlayerSlot. Authoritative: "
+        + "ServerSideCharacters is enabled, so the client applies the update.";
 
     private static RestObject Success(RestObject data) => data;
 
