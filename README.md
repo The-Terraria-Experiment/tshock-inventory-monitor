@@ -1,6 +1,6 @@
 # InventoryMonitor
 
-A TShock **6.1** plugin (.NET 9) for reading and managing player inventories over the built-in
+A TShock **6.2** plugin (.NET 9) for reading and managing player inventories over the built-in
 **REST API** and equivalent **in-game commands**. It reports every item across a player's entire
 inventory surface — main inventory, armor/accessories, dyes, misc equips, personal storage
 (piggy bank / safe / forge / void vault / trash), the three equipment loadouts — plus active
@@ -17,7 +17,7 @@ dotnet build InventoryMonitor/InventoryMonitor.csproj -c Release
 ```
 
 Copy `bin/Release/InventoryMonitor.dll` into your server's `ServerPlugins/` folder and restart.
-The build references the `TShock` 6.1.0 NuGet package with compile-only assets, so **only
+The build references the `TShock` 6.2.1 NuGet package with compile-only assets, so **only
 `InventoryMonitor.dll` is produced** — no TShock/OTAPI assemblies are bundled. To auto-copy on
 build, pass your server path:
 

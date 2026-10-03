@@ -131,7 +131,7 @@ public sealed class InventoryManager
         if (item is null)
             return;
 
-        item.TurnToAir(true);
+        item.TurnToAir();
         SendSlot(tsp, globalSlot, 0);
     }
 
@@ -159,7 +159,7 @@ public sealed class InventoryManager
     }
 
     private static bool IsOccupied(Item? item) =>
-        item is not null && item.active && item.type != 0 && item.stack > 0;
+        item is not null && !item.IsAir;
 
     private static SlotEntry ToEntry(int globalSlot, Item item)
     {

@@ -17,7 +17,7 @@ public sealed class InventoryMonitorPlugin : TerrariaPlugin
     public override string Name => "InventoryMonitor";
     public override string Author => "Caleb Dougal";
     public override string Description => "Monitor and manage player inventories via REST and in-game commands.";
-    public override Version Version => new(1, 0, 0, 0);
+    public override Version Version => new(1, 1, 0, 0);
 
     private readonly MainThreadDispatcher _dispatcher = new();
     private InvMonitorConfig _config = new();

@@ -76,7 +76,7 @@ public static class InventoryReader
                 for (int i = 0; i < seg.Count && i < arr.Length; i++)
                 {
                     var item = arr[i];
-                    if (item is null || !item.active || item.type == 0 || item.stack == 0)
+                    if (item is null || item.IsAir)
                         continue;
 
                     container.Items.Add(new SlotEntry

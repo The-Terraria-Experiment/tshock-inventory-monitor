@@ -20,7 +20,7 @@
 
   <ItemGroup>
     <!-- compile-only: reference TShock's public API but do not copy its runtime assemblies. -->
-    <PackageReference Include="TShock" Version="6.1.0">
+    <PackageReference Include="TShock" Version="6.2.1">
       <!-- compile only: the server process already hosts TShock/OTAPI and its content assets
            (e.g. HttpServer.dll), so we neither copy runtime assemblies nor content files. -->
       <ExcludeAssets>runtime;contentFiles</ExcludeAssets>
